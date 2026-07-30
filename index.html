@@ -221,6 +221,127 @@ addEventListener('keydown',e=>{
 addEventListener('keyup',e=>keys.delete(e.code));
 cv.addEventListener('pointerdown',()=>{initAudio(); if(S.state==='title'||(S.state==='over'&&S.overT>45))startGame();});
 
+/* ── Touch Controls ── */
+let touchActive=false,touchStartX=0,touchStartY=0,touchLastX=0,touchLastY=0;
+const isTouchDevice='ontouchstart' in window || navigator.maxTouchPoints>0;
+cv.style.touchAction='none';
+cv.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch'||isTouchDevice){
+    e.preventDefault(); initAudio();
+    touchActive=true; touchStartX=e.clientX; touchStartY=e.clientY; touchLastX=e.clientX; touchLastY=e.clientY;
+    const rect=cv.getBoundingClientRect();
+    const scaleX=cv.width/rect.width;
+    const scaleY=cv.height/rect.height;
+    const tx=(e.clientX-rect.left)*scaleX;
+    const ty=(e.clientY-rect.top)*scaleY;
+    if(S.state==='title'||(S.state==='over'&&S.overT>45)){ startGame(); }
+  }
+},{passive:false});
+cv.addEventListener('pointermove',e=>{
+  if(!touchActive)return;
+  if(e.pointerType==='touch'||isTouchDevice){
+    e.preventDefault();
+    const rect=cv.getBoundingClientRect();
+    const scaleX=cv.width/rect.width;
+    const scaleY=cv.height/rect.height;
+    const currX=(e.clientX-rect.left)*scaleX;
+    const currY=(e.clientY-rect.top)*scaleY;
+    const deltaX=currX-touchLastX;
+    const deltaY=currY-touchLastY;
+    if(Math.abs(deltaX)>0||Math.abs(deltaY)>0){
+      P.x+=deltaX*0.6;
+      P.y+=deltaY*0.6;
+      P.x=clamp(P.x,8,IW-8);
+      P.y=clamp(P.y,10,IH-8);
+      crit('fly');
+    }
+    touchLastX=currX; touchLastY=currY;
+  }
+},{passive:false});
+cv.addEventListener('pointerup',e=>{
+  if(e.pointerType==='touch'||isTouchDevice){
+    e.preventDefault(); touchActive=false;
+  }
+});
+cv.addEventListener('pointercancel',e=>{ if(e.pointerType==='touch'||isTouchDevice){ e.preventDefault(); touchActive=false; }});
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+
+// Touch UI overlay
+const touchUI=document.createElement('div');
+touchUI.innerHTML=`
+<style>
+#touchUI{position:absolute;inset:0;pointer-events:none;display:none}
+#touchUI.show{display:block}
+.tbtn{position:absolute;pointer-events:auto;background:rgba(94,233,255,.15);border:2px solid rgba(94,233,255,.5);border-radius:50%;color:#5ee9ff;font-family:'Press Start 2P',monospace;font-size:10px;display:flex;align-items:center;justify-content:center;user-select:none;touch-action:none;backdrop-filter:blur(2px)}
+.tbtn:active{background:rgba(94,233,255,.4)}
+.tbtn.dash{width:52px;height:52px;right:16px;bottom:70px;border-color:rgba(255,160,60,.6);color:#ffa03c}
+.tbtn.bomb{width:44px;height:44px;right:76px;bottom:60px;border-color:rgba(255,77,109,.6);color:#ff4d6d;font-size:8px}
+.tbtn.weapon{width:48px;height:48px;left:16px;bottom:60px;border-color:rgba(154,123,255,.6);color:#9a7bff;font-size:7px}
+.tbtn.pause{width:40px;height:40px;top:16px;right:16px;border-color:rgba(94,233,255,.5);color:#5ee9ff;font-size:8px}
+</style>
+<div id="touchUI">
+  <div class="tbtn dash" data-act="dash">DASH</div>
+  <div class="tbtn bomb" data-act="bomb">BOMB</div>
+  <div class="tbtn weapon" data-act="weapon">WEAPON</div>
+  <div class="tbtn pause" data-act="pause">⏸</div>
+</div>`;
+document.querySelector('.crt').appendChild(touchUI);
+const tui=document.getElementById('touchUI');
+if(isTouchDevice)tui.classList.add('show');
+tui.querySelectorAll('.tbtn').forEach(btn=>{
+  btn.addEventListener('pointerdown',e=>{
+    e.preventDefault(); e.stopPropagation(); initAudio();
+    const act=btn.dataset.act;
+    if(act==='dash'){ if(P.dashCd<=0&&P.dashT<=0){ P.dashT=11; P.dashCd=85; P.inv=Math.max(P.inv,17); SFX.dash(); crit('dash'); }}
+    else if(act==='bomb'){ if(P.bombs>0){ P.bombs--; S.flash=1; S.shake=12; SFX.bomb(); crit('bomb');
+        eB.forEach(b=>parts.push({x:b.x,y:b.y,vx:R(-1,1),vy:R(-1,1),life:20,max:20,c:'#5ee9ff',s:2})); eB=[];
+        enemies.forEach(e=>damageEnemy(e,25)); if(S.boss&&!S.boss.dead)damageBoss(25); }}
+    else if(act==='weapon'){ P.w=(P.w+1)%3; crit('switch'); popup(P.x,P.y-14,WEAPONS[P.w].name+' Lv'+P.lvl[P.w],WEAPONS[P.w].color); }
+    else if(act==='pause'){ if(S.state==='play'||S.state==='pause')S.state=S.state==='play'?'pause':'play'; }
+  });
+});
+
+/* ── Gamepad Support ── */
+let gpIndex=null;
+addEventListener('gamepadconnected',e=>{ gpIndex=e.gamepad.index; console.log('🎮 GAMEPAD CONNECTED:',e.gamepad.id); });
+addEventListener('gamepaddisconnected',e=>{ if(gpIndex===e.gamepad.index)gpIndex=null; });
+function pollGamepad(){
+  if(gpIndex===null)return;
+  const gp=navigator.getGamepads()[gpIndex];
+  if(!gp)return;
+  // Movement: Left stick or D-pad
+  let mx=0,my=0;
+  const deadzone=0.2;
+  if(Math.abs(gp.axes[0])>deadzone)mx=gp.axes[0]>0?1:-1;
+  if(Math.abs(gp.axes[1])>deadzone)my=gp.axes[1]>0?1:-1;
+  if(gp.buttons[14]?.pressed)my=1; // D-pad down
+  if(gp.buttons[12]?.pressed)my=-1; // D-pad up
+  if(gp.buttons[15]?.pressed)mx=1; // D-pad right
+  if(gp.buttons[13]?.pressed)mx=-1; // D-pad left
+  if(mx||my){
+    P.x+=mx*P.sp*0.9; P.y+=my*P.sp*0.9;
+    P.x=clamp(P.x,8,IW-8); P.y=clamp(P.y,10,IH-8);
+    crit('fly');
+  }
+  // A button (0) = Dash
+  if(gp.buttons[0]?.pressed&&!gp.buttons[0].wasPressed&&P.dashCd<=0&&P.dashT<=0){
+    P.dashT=11; P.dashCd=85; P.inv=Math.max(P.inv,17); SFX.dash(); crit('dash');
+  }
+  // X (2) or B (1) = Bomb
+  if((gp.buttons[2]?.pressed||gp.buttons[1]?.pressed)&&!((gp.buttons[2]||gp.buttons[1]).wasPressed)&&P.bombs>0){
+    P.bombs--; S.flash=1; S.shake=12; SFX.bomb(); crit('bomb');
+    eB.forEach(b=>parts.push({x:b.x,y:b.y,vx:R(-1,1),vy:R(-1,1),life:20,max:20,c:'#5ee9ff',s:2})); eB=[];
+    enemies.forEach(e=>damageEnemy(e,25)); if(S.boss&&!S.boss.dead)damageBoss(25);
+  }
+  // LB (4) / RB (5) = Change weapon
+  if(gp.buttons[4]?.pressed&&!gp.buttons[4].wasPressed){ P.w=(P.w+2)%3; crit('switch'); popup(P.x,P.y-14,WEAPONS[P.w].name+' Lv'+P.lvl[P.w],WEAPONS[P.w].color); }
+  if(gp.buttons[5]?.pressed&&!gp.buttons[5].wasPressed){ P.w=(P.w+1)%3; crit('switch'); popup(P.x,P.y-14,WEAPONS[P.w].name+' Lv'+P.lvl[P.w],WEAPONS[P.w].color); }
+  // Start (9) = Pause
+  if(gp.buttons[9]?.pressed&&!gp.buttons[9].wasPressed){ if(S.state==='play'||S.state==='pause')S.state=S.state==='play'?'pause':'play'; }
+  // Store previous state for edge detection
+  for(let i=0;i<16;i++){ if(gp.buttons[i])gp.buttons[i].wasPressed=gp.buttons[i].pressed; }
+}
+
 /* ── audio (สังเคราะห์ล้วน ไม่ต้องใช้ไฟล์) ── */
 let AC=null,master,musicGain,muted=false,nbuf=null,mNext=0,mStep=0;
 function getNB(){ if(!nbuf&&AC){nbuf=AC.createBuffer(1,AC.sampleRate,AC.sampleRate);const d=nbuf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;} return nbuf; }
@@ -882,8 +1003,8 @@ let last=performance.now();
 function loop(now){ requestAnimationFrame(loop);
   let dt=Math.min((now-last)/16.666,2.5); last=now; S.t++;
   for(const s of stars){s.y+=[0,.4,.9,1.7][s.z]*dt*(S.state==='play'?1:.45);if(s.y>IH){s.y=-2;s.x=R(0,IW);}}
-  if(S.state==='play')updatePlay(dt);
-  else if(S.state==='over'){S.overT+=dt;fxUpdate(dt);}
+  if(S.state==='play'){ updatePlay(dt); pollGamepad(); }
+  else if(S.state==='over'){S.overT+=dt;fxUpdate(dt); pollGamepad();}
   if(just.has('Enter')){ if(S.state==='title')startGame();
     else if(S.state==='over'&&S.overT>45)startGame();
     else if(S.state==='pause')S.state='play'; }
