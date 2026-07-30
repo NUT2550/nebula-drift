@@ -367,10 +367,47 @@ function killEnemy(e){ explode(e.x,e.y,e.r+6); S.shake=Math.max(S.shake,e.r>7?6:
   if(e.type==='splitter'){ for(const s of[-1,1]){const m=spawnEnemy('mini');m.x=e.x+s*6;m.y=e.y;m.vx=s*1.1;} }
   SFX.boom(e.r>7); crit('kill');
 }
-function damageBoss(d){ const b=S.boss; if(!b||b.dead)return; b.hp-=d; b.flash=4;
-  if(b.hp<=0){b.dead=true;b.dieT=70;SFX.alarm();} else SFX.hit(); }
-function spawnBoss(){ S.boss={x:IW/2,y:-30,ty:56,r:20,hp:0,max:220+S.wave*40,t:0,cd:90,pattern:0,flash:0,dead:false,entering:true,dieT:0};
-  S.boss.hp=S.boss.max; S.banner='⚠ WARNING ⚠'; S.bannerT=150; SFX.alarm(); }
+function damageBoss(d){ const b=S.boss; if(!b||b.dead)return;
+  // DREADNOUGHT armor check
+  if (b.typeIdx === 2 && !b.armorOpen) {
+    // Immune when armor closed - visual feedback only
+    b.flash = 2;
+    return;
+  }
+  b.hp -= d; b.flash = 4;
+  if(b.hp<=0){b.dead=true;b.dieT=70;SFX.alarm();} else SFX.hit(); 
+}
+function spawnBoss(typeIdx){
+  const bt = BOSS_TYPES[typeIdx] || BOSS_TYPES[0];
+  let hp, r, patternCount;
+  if (typeIdx === 0) { // HIVE QUEEN
+    hp = 260 + S.wave * 30; r = 22; patternCount = 3;
+  } else if (typeIdx === 1) { // PRISM LANCER
+    hp = 320 + S.wave * 30; r = 18; patternCount = 3;
+  } else { // DREADNOUGHT
+    hp = 400 + S.wave * 35; r = 26; patternCount = 3;
+  }
+  S.boss = {
+    x: IW/2, y: -30, ty: 56, r: r,
+    hp: hp, max: hp,
+    t: 0, cd: 90, pattern: 0,
+    flash: 0, dead: false,
+    entering: true, dieT: 0,
+    typeIdx: typeIdx,
+    armorOpen: true, armorTimer: 0,
+    swarmCount: 0, beamWarn: false, beamX: 0
+  };
+  S.boss.hp = S.boss.max;
+  S.banner = '⚠ ' + bt.name + ' ⚠';
+  S.bannerT = 120;
+  SFX.alarm();
+  // Show subtitle
+  setTimeout(() => {
+    if (S.boss && !S.boss.dead) {
+      popup(IW/2, IH/2 + 20, bt.subtitle, bt.color);
+    }
+  }, 800);
+}
 function updateBoss(dt){ const b=S.boss; if(!b)return;
   if(b.flash>0)b.flash-=dt;
   if(b.dead){ b.dieT-=dt;
@@ -382,19 +419,142 @@ function updateBoss(dt){ const b=S.boss; if(!b)return;
       S.boss=null; SFX.boom(true); crit('boss'); }
     return; }
   if(b.entering){ b.y+=1.1*dt; if(b.y>=b.ty){b.y=b.ty;b.entering=false;} return; }
-  b.t+=dt; b.x=IW/2+Math.sin(b.t*.013)*72;
-  const enr=b.hp<b.max*.4; b.cd-=dt;
-  if(b.cd<=0){ b.pattern=(b.pattern+1)%(enr?4:3);
-    if(b.pattern===0){const n=enr?20:14;for(let i=0;i<n;i++){const a=TAU*i/n+b.t*.01;eB.push({x:b.x,y:b.y+6,vx:Math.cos(a)*1.5,vy:Math.sin(a)*1.5,r:3,dmg:14});}b.cd=enr?40:55;}
-    else if(b.pattern===1){const base=Math.atan2(P.y-b.y,P.x-b.x);for(let i=-2;i<=2;i++){const a=base+i*.12;eB.push({x:b.x,y:b.y+8,vx:Math.cos(a)*2.3,vy:Math.sin(a)*2.3,r:3,dmg:14});}b.cd=enr?34:50;}
-    else if(b.pattern===2){if(enemies.length<5){spawnEnemy('drone');spawnEnemy('drone');}b.cd=60;}
-    else{for(let k=0;k<3;k++){const a=b.t*.18+k*TAU/3;eB.push({x:b.x,y:b.y+6,vx:Math.cos(a)*1.7,vy:Math.sin(a)*1.7,r:3,dmg:14});}b.cd=20;} }
+  
+  const enr = b.hp < b.max * 0.4;
+  const typeIdx = b.typeIdx || 0;
+  
+  // Boss-specific behavior
+  if (typeIdx === 0) { // HIVE QUEEN
+    b.x = IW/2 + Math.sin(b.t * 0.013) * 60;
+    b.t += dt;
+    b.cd -= dt;
+    if (b.cd <= 0) {
+      b.pattern = (b.pattern + 1) % (enr ? 4 : 3);
+      if (b.pattern === 0) { // Spore Burst
+        const n = enr ? 20 : 14;
+        for (let i = 0; i < n; i++) {
+          const a = TAU * i / n + b.t * 0.01;
+          eB.push({x: b.x, y: b.y + 6, vx: Math.cos(a) * (i % 2 === 0 ? 1.5 : 2.8), vy: Math.sin(a) * (i % 2 === 0 ? 1.5 : 2.8), r: 3, dmg: 14});
+        }
+        b.cd = enr ? 35 : 50;
+      } else if (b.pattern === 1) { // Acid Spit
+        const base = Math.atan2(P.y - b.y, P.x - b.x);
+        for (let i = -2; i <= 2; i++) {
+          const a = base + i * 0.15;
+          eB.push({x: b.x, y: b.y + 8, vx: Math.cos(a) * 2.0, vy: Math.sin(a) * 2.0, r: 3, dmg: 14});
+        }
+        b.cd = enr ? 30 : 45;
+      } else if (b.pattern === 2 || enr) { // Swarm Birth
+        if (b.swarmCount < 6 && enemies.length < 8) {
+          spawnEnemy('drone');
+          b.swarmCount++;
+          if (enr && b.swarmCount < 3) spawnEnemy('drone');
+        }
+        b.cd = 55;
+      }
+    }
+  } else if (typeIdx === 1) { // PRISM LANCER
+    // Fast dash movement
+    const dashPhase = Math.floor(b.t / 40) % 2;
+    if (dashPhase === 0) {
+      b.x = IW/2 + Math.sin(b.t * 0.02) * 80;
+    } else {
+      b.x += (P.x - b.x) * 0.03 * dt;
+    }
+    b.t += dt;
+    b.cd -= dt;
+    if (b.cd <= 0) {
+      b.pattern = (b.pattern + 1) % (enr ? 4 : 3);
+      if (b.pattern === 0) { // Needle Rain
+        const count = enr ? 12 : 8;
+        for (let i = 0; i < count; i++) {
+          const a = Math.atan2(P.y - b.y, P.x - b.x) + (i - count/2) * 0.12;
+          eB.push({x: b.x, y: b.y + 6, vx: Math.cos(a) * 3.2, vy: Math.sin(a) * 3.2, r: 2, dmg: 12});
+        }
+        b.cd = enr ? 25 : 40;
+      } else if (b.pattern === 1) { // Beam Strike
+        b.beamWarn = true;
+        b.beamX = P.x + (Math.random() < 0.5 ? 40 : -40);
+        setTimeout(() => {
+          if (b && !b.dead && b.beamWarn) {
+            b.beamWarn = false;
+            // Fire beam
+            for (let y = b.y + 20; y < IH; y += 8) {
+              parts.push({x: b.beamX, y: y, vx: 0, vy: 0, life: 8, max: 8, c: '#5ee9ff', s: 6, ring: 1, r: 12});
+              if (Math.abs(P.x - b.beamX) < 10 && P.y >= y - 10 && P.y <= y + 10) {
+                damagePlayer(18);
+              }
+            }
+            SFX.boom(false);
+          }
+        }, 800);
+        b.cd = enr ? 45 : 65;
+      } else if (b.pattern === 2 || enr) { // Prism Fan
+        const fanCount = enr ? 14 : 9;
+        const baseAngle = -Math.PI/2;
+        for (let i = 0; i < fanCount; i++) {
+          const a = baseAngle + (i - (fanCount-1)/2) * 0.25;
+          eB.push({x: b.x, y: b.y + 6, vx: Math.cos(a) * 2.5, vy: Math.sin(a) * 2.5, r: 2, dmg: 12});
+        }
+        b.cd = enr ? 30 : 50;
+      }
+    }
+  } else { // DREADNOUGHT
+    // Slow movement
+    b.x = IW/2 + Math.sin(b.t * 0.005) * 20;
+    b.t += dt;
+    
+    // Armor cycle
+    b.armorTimer -= dt;
+    if (b.armorTimer <= 0) {
+      b.armorOpen = !b.armorOpen;
+      b.armorTimer = b.armorOpen ? (enr ? 25 : 40) : (enr ? 20 : 30);
+    }
+    
+    b.cd -= dt;
+    if (b.cd <= 0) {
+      b.pattern = (b.pattern + 1) % 3;
+      if (b.pattern === 0 && b.armorOpen) { // Heavy Shells
+        for (let i = 0; i < 3; i++) {
+          const angle = -Math.PI/2 + (i - 1) * 0.3;
+          eB.push({x: b.x, y: b.y + 10, vx: Math.cos(angle) * 1.2, vy: Math.sin(angle) * 1.2 + 0.5, r: 5, dmg: 18, split: true, splitDist: 60});
+        }
+        b.cd = enr ? 40 : 60;
+      } else if (b.pattern === 1 && b.armorOpen) { // Homing Orbs
+        const orbCount = enr ? 4 : 2;
+        for (let i = 0; i < orbCount; i++) {
+          const offset = (i - (orbCount-1)/2) * 30;
+          eB.push({x: b.x + offset, y: b.y + 8, vx: 0, vy: 1.0, r: 4, dmg: 16, homing: true, turn: 0.06});
+        }
+        b.cd = enr ? 35 : 55;
+      } else {
+        // Wait for armor to open
+        b.cd = 15;
+      }
+    }
+  }
 }
 
 /* ── waves ── */
+const BOSS_TYPES = [
+  { name: 'HIVE QUEEN', color: '#7bd66a', subtitle: 'ราชินีรัง — ระวังฝูงบินและสปอร์พิษ' },
+  { name: 'PRISM LANCER', color: '#5ee9ff', subtitle: 'หอกลำแสง — หลบเลเซอร์และเข็มทะลุ' },
+  { name: 'DREADNOUGHT', color: '#ffa03c', subtitle: 'ป้อมปราการ — โจมตีตอนเกราะเปิดเท่านั้น' }
+];
+function getBossTypeForWave(wave) {
+  if (wave === 5) return 0; // HIVE QUEEN
+  if (wave === 10) return 1; // PRISM LANCER
+  if (wave === 15) return 2; // DREADNOUGHT
+  if (wave >= 20) return (Math.floor(wave/5) - 1) % 3;
+  return 0; // default
+}
 function nextWave(){ S.wave++; if(S.wave>=3)crit('wave3');
-  if(S.wave%5===0){spawnBoss();S.spawnQueue=[];return;}
+  if(S.wave%5===0){spawnBoss(getBossTypeForWave(S.wave));S.spawnQueue=[];return;}
   S.banner='WAVE '+S.wave; S.bannerT=110;
+  // Wave clear bonus for non-boss waves
+  const bonus = 500 * S.wave * S.mult;
+  S.score += bonus;
+  popup(IW/2, IH/2, 'WAVE CLEAR +'+bonus, '#ffe27a');
   let b=5+S.wave*3; const q=[];
   while(b>0){ const opts=[['drone',1],['weaver',2]];
     if(S.wave>=2)opts.push(['gunner',2]);
@@ -427,8 +587,39 @@ function updatePlay(dt){
       if(b.kind===1){b.pierce--;if(b.pierce<=0)b.gone=true;}else b.gone=true; }
   }
   pB=pB.filter(b=>!b.gone&&b.life>0&&b.y>-20&&b.y<IH+20&&b.x>-20&&b.x<IW+20);
-  for(const b of eB){ b.x+=b.vx*dt;b.y+=b.vy*dt;
-    if(P.alive&&(P.x-b.x)**2+(P.y-b.y)**2<(P.r+b.r)**2){damagePlayer(b.dmg);b.gone=true;} }
+  for(const b of eB){ 
+    // Homing bullet logic
+    if (b.homing) {
+      const tg = nearestEnemy(b.x, b.y);
+      if (tg && P.alive) {
+        const want = Math.atan2(P.y - b.y, P.x - b.x);
+        const cur = Math.atan2(b.vy, b.vx);
+        let d = want - cur;
+        while (d > Math.PI) d -= TAU;
+        while (d < -Math.PI) d += TAU;
+        d = clamp(d, -b.turn * dt, b.turn * dt);
+        const sp = Math.hypot(b.vx, b.vy);
+        const a = cur + d;
+        b.vx = Math.cos(a) * sp;
+        b.vy = Math.sin(a) * sp;
+      }
+    }
+    // Split bullet logic
+    if (b.split && !b.splitDone) {
+      const distTraveled = Math.hypot(b.x - (IW/2), b.y - 50);
+      if (distTraveled >= b.splitDist) {
+        b.splitDone = true;
+        // Split into smaller bullets
+        for (let i = 0; i < 6; i++) {
+          const a = (TAU / 6) * i;
+          eB.push({x: b.x, y: b.y, vx: Math.cos(a) * 1.5, vy: Math.sin(a) * 1.5, r: 2, dmg: 8});
+        }
+        b.gone = true;
+      }
+    }
+    b.x+=b.vx*dt;b.y+=b.vy*dt;
+    if(P.alive&&(P.x-b.x)**2+(P.y-b.y)**2<(P.r+b.r)**2){damagePlayer(b.dmg);b.gone=true;} 
+  }
   eB=eB.filter(b=>!b.gone&&b.x>-12&&b.x<IW+12&&b.y>-12&&b.y<IH+12);
   for(const e of enemies){ if(e.dead)continue; e.t+=dt; if(e.flash>0)e.flash-=dt; updateEnemy(e,dt);
     if(P.alive&&(e.x-P.x)**2+(e.y-P.y)**2<(e.r+P.r)**2){damagePlayer(e.type==='splitter'?18:12);damageEnemy(e,6);} }
@@ -486,18 +677,121 @@ function drawEnemies(){ for(const e of enemies){ if(e.dead)continue; const f=e.f
       ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(dx/l*400,dy/l*400);ctx.stroke();} }
   ctx.restore(); } }
 function drawBossFn(){ const b=S.boss; if(!b)return; const f=b.flash>0,enr=b.hp<b.max*.4;
+  const typeIdx = b.typeIdx || 0;
+  const bt = BOSS_TYPES[typeIdx] || BOSS_TYPES[0];
+  
   ctx.save();ctx.translate(Math.round(b.x),Math.round(b.y));
-  ctx.fillStyle=f?'#fff':'#31406e';
-  ctx.beginPath();ctx.moveTo(-26,4);ctx.lineTo(-15,-11);ctx.lineTo(15,-11);ctx.lineTo(26,4);ctx.lineTo(15,13);ctx.lineTo(-15,13);ctx.closePath();ctx.fill();
-  ctx.fillStyle=f?'#fff':'#232e52';ctx.fillRect(-13,-7,26,12);
-  ctx.fillStyle=f?'#fff':'#ffa03c';ctx.fillRect(-22,1,6,6);ctx.fillRect(16,1,6,6);
-  const pr=3.5+Math.sin(S.t*.2)*1.2;
-  ctx.fillStyle=enr?'#ff4d6d':'#5ee9ff';ctx.shadowColor=enr?'#ff4d6d':'#5ee9ff';ctx.shadowBlur=8;
-  ctx.beginPath();ctx.arc(0,2,pr,0,TAU);ctx.fill();ctx.shadowBlur=0;
+  
+  // Different boss appearances based on type
+  if (typeIdx === 0) { // HIVE QUEEN - green organic blob
+    ctx.fillStyle = f ? '#fff' : '#2d5a3d';
+    // Main body with pulsing effect
+    const pulse = Math.sin(b.t * 0.15) * 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 24 + pulse, 18 - pulse, 0, 0, TAU);
+    ctx.fill();
+    // Pockets/bumps
+    ctx.fillStyle = f ? '#aaffaa' : bt.color;
+    for (let i = 0; i < 5; i++) {
+      const angle = (TAU / 5) * i + b.t * 0.02;
+      const px = Math.cos(angle) * 16;
+      const py = Math.sin(angle) * 12;
+      ctx.beginPath();
+      ctx.arc(px, py, 4 + Math.sin(b.t * 0.1 + i) * 1.5, 0, TAU);
+      ctx.fill();
+    }
+    // Core
+    ctx.fillStyle = enr ? '#ff4d6d' : '#7bd66a';
+    ctx.shadowColor = enr ? '#ff4d6d' : '#7bd66a';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(0, 0, 6 + Math.sin(b.t * 0.2) * 2, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  } else if (typeIdx === 1) { // PRISM LANCER - cyan diamond/arrow shape
+    ctx.fillStyle = f ? '#fff' : '#1a4a5c';
+    // Diamond body
+    ctx.beginPath();
+    ctx.moveTo(0, -18);
+    ctx.lineTo(12, 0);
+    ctx.lineTo(0, 14);
+    ctx.lineTo(-12, 0);
+    ctx.closePath();
+    ctx.fill();
+    // Inner glow
+    ctx.fillStyle = f ? '#bff6ff' : bt.color;
+    ctx.beginPath();
+    ctx.moveTo(0, -10);
+    ctx.lineTo(6, 0);
+    ctx.lineTo(0, 8);
+    ctx.lineTo(-6, 0);
+    ctx.closePath();
+    ctx.fill();
+    // Core
+    ctx.fillStyle = enr ? '#ff4d6d' : '#5ee9ff';
+    ctx.shadowColor = enr ? '#ff4d6d' : '#5ee9ff';
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(0, 0, 4 + Math.sin(b.t * 0.25) * 1.5, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // Beam warning indicator
+    if (b.beamWarn) {
+      ctx.strokeStyle = 'rgba(94, 233, 255, 0.6)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, 16);
+      ctx.lineTo(0, 28);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  } else { // DREADNOUGHT - orange/red fortress
+    ctx.fillStyle = f ? '#fff' : '#3d2a1a';
+    // Main hull
+    ctx.fillRect(-26, -8, 52, 16);
+    // Armor plates
+    if (b.armorOpen) {
+      // Open state - weak point visible
+      ctx.fillStyle = f ? '#fff' : '#5c3a1a';
+      ctx.fillRect(-20, -6, 40, 12);
+      // Glowing weak point
+      ctx.fillStyle = enr ? '#ff4d6d' : '#ffa03c';
+      ctx.shadowColor = enr ? '#ff4d6d' : '#ffa03c';
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(0, 0, 8 + Math.sin(b.t * 0.1) * 2, 0, TAU);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      // Closed armor state
+      ctx.fillStyle = f ? '#ffd7dd' : '#8b5a2b';
+      ctx.fillRect(-24, -7, 48, 14);
+      // Armor segments
+      ctx.fillStyle = '#5c3a1a';
+      for (let i = -3; i <= 3; i++) {
+        ctx.fillRect(i * 12 - 4, -6, 8, 12);
+      }
+    }
+    // Turrets
+    ctx.fillStyle = f ? '#fff' : '#ffa03c';
+    ctx.fillRect(-22, -4, 6, 8);
+    ctx.fillRect(16, -4, 6, 8);
+  }
+  
   ctx.restore();
-  const w=IW-60;ctx.fillStyle='#152044';ctx.fillRect(30,32,w,4);
-  ctx.fillStyle=enr?'#ff4d6d':'#ffa03c';ctx.fillRect(30,32,w*clamp(b.hp/b.max,0,1),4);
-  ctx.fillStyle='#6b7aa3';ctx.font='5px "Press Start 2P"';ctx.textAlign='left';ctx.fillText('BOSS',30,29); }
+  
+  // Health bar with boss color
+  const w = IW - 60;
+  ctx.fillStyle = '#152044';
+  ctx.fillRect(30, 32, w, 4);
+  ctx.fillStyle = enr ? '#ff4d6d' : bt.color;
+  ctx.fillRect(30, 32, w * clamp(b.hp / b.max, 0, 1), 4);
+  ctx.fillStyle = '#6b7aa3';
+  ctx.font = '5px "Press Start 2P"';
+  ctx.textAlign = 'left';
+  ctx.fillText(bt.name.split(' ')[0], 30, 29);
+}
 function draw(){
   ctx.save();
   if(S.shake>0){ctx.translate(Math.round(R(-S.shake,S.shake)),Math.round(R(-S.shake,S.shake)));S.shake*=.86;if(S.shake<.4)S.shake=0;}
